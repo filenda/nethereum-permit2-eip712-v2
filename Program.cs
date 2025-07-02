@@ -17,7 +17,7 @@ namespace BrlaUsdcSwap
             Console.WriteLine("==============================================");
             Console.WriteLine("   BRLA/USDC DEX Aggregator Swap Application  ");
             Console.WriteLine("==============================================");
-
+            
             try
             {
                 // Build configuration
@@ -37,7 +37,9 @@ namespace BrlaUsdcSwap
                     .AddHttpClient("ZeroEx", client =>
                     {
                         var zeroExConfig = configuration.GetSection("AppSettings:Aggregator");
+                        // Explicitly set base address
                         client.BaseAddress = new Uri(zeroExConfig["ZeroExApiBaseUrl"]);
+                        // Explicitly set headers
                         client.DefaultRequestHeaders.Add("0x-api-key", zeroExConfig["ZeroExApiKey"]);
                         client.DefaultRequestHeaders.Add("0x-version", zeroExConfig["ZeroExApiVer"]);
                     })
@@ -65,6 +67,16 @@ namespace BrlaUsdcSwap
                 var swapService = serviceProvider.GetRequiredService<ISwapService>();
                 var appSettings = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<AppSettings>>().Value;
 
+                // Get wallet address from private key
+                string walletAddress = appSettings.GetWalletAddress();
+                if (string.IsNullOrEmpty(walletAddress))
+                {
+                    Console.WriteLine("Error: Private key is missing or invalid in appsettings.json");
+                    return;
+                }
+
+                Console.WriteLine($"Using wallet address: {walletAddress}");
+
                 // Display menu
                 Console.WriteLine("Token Swap Options:");
                 Console.WriteLine("1. Swap BRLA to USDC");
@@ -72,7 +84,7 @@ namespace BrlaUsdcSwap
 
                 // Get swap direction
                 int swapDirection = 1; // Default to BRLA → USDC
-
+                
                 if (args.Length > 1 && int.TryParse(args[1], out int argDirection) && (argDirection == 1 || argDirection == 2))
                 {
                     swapDirection = argDirection;
@@ -111,7 +123,7 @@ namespace BrlaUsdcSwap
 
                 // Execute the swap
                 var result = await swapService.SwapTokensAsync(sellTokenAddress, buyTokenAddress, amountToSwap);
-
+                
                 // Transaction result is displayed by the SwapService
             }
             catch (Exception ex)
@@ -122,7 +134,7 @@ namespace BrlaUsdcSwap
                 {
                     Console.WriteLine($"Inner Error: {ex.InnerException.Message}");
                 }
-
+                
                 // Additional error details
                 Console.WriteLine("\nTroubleshooting tips:");
                 Console.WriteLine("1. Check your token balance");

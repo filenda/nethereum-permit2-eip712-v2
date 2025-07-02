@@ -30,7 +30,8 @@ namespace BrlaUsdcSwap.Services.Implementations
 
         public ZeroExAggregator(IHttpClientFactory httpClientFactory, IOptions<AppSettings> appSettings)
         {
-            _httpClient = httpClientFactory.CreateClient("ZeroEx");
+            // _httpClient = httpClientFactory.CreateClient("ZeroEx");
+            _httpClient = httpClientFactory.CreateClient();
             _appSettings = appSettings.Value;
 
             // Set base address and default headers
@@ -46,7 +47,7 @@ namespace BrlaUsdcSwap.Services.Implementations
         public async Task<QuoteResponse> GetQuoteAsync(QuoteRequest request)
         {
             Console.WriteLine($"Getting quote from {Name}...");
-            
+
             // Determine correct decimals based on which token is being sold
             int decimals = request.SellTokenAddress == _appSettings.BrlaTokenAddress
                 ? _appSettings.BrlaDecimals
@@ -62,7 +63,7 @@ namespace BrlaUsdcSwap.Services.Implementations
             queryParams["sellToken"] = request.SellTokenAddress;
             queryParams["sellAmount"] = sellAmountInWei.ToString();
             queryParams["taker"] = request.WalletAddress;
-            
+
             // Add any additional parameters
             foreach (var param in request.AdditionalParams)
             {
@@ -71,7 +72,11 @@ namespace BrlaUsdcSwap.Services.Implementations
 
             // Make the request
             var response = await _httpClient.GetAsync($"swap/permit2/quote?{queryParams}");
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                throw new Exception($"0x API error: {response.StatusCode} - {errorContent}");
+            }
 
             // Parse the response
             var content = await response.Content.ReadAsStringAsync();
@@ -95,30 +100,30 @@ namespace BrlaUsdcSwap.Services.Implementations
             };
 
             Console.WriteLine($"0x quote received: {standardResponse.BuyAmount} (buy) for {standardResponse.SellAmount} (sell)");
-            
+
             return standardResponse;
         }
 
         public async Task<SwapResponse> ExecuteSwapAsync(SwapRequest request)
         {
             Console.WriteLine($"Executing swap with {Name}...");
-            
+
             // Get the original quote response
             var quoteData = (ZeroExQuoteResponse)request.QuoteData.OriginalResponse;
-            
+
             // Initialize web3 with the user's private key
             var web3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-            
+
             string transactionHash;
-            
+
             // Check if this is a Permit2 transaction
             if (quoteData.Permit2?.Eip712 != null)
             {
                 Console.WriteLine("Using Permit2 signature for one-transaction swap...");
-                
+
                 // Generate Permit2 signature
                 var signature = GeneratePermit2Signature(quoteData.Permit2.Eip712, request.PrivateKey);
-                
+
                 // Execute with signature
                 transactionHash = await ExecuteSwapWithPermit2Signature(web3, quoteData, signature);
             }
@@ -132,15 +137,15 @@ namespace BrlaUsdcSwap.Services.Implementations
             // Wait for receipt and verify success
             Console.WriteLine($"Transaction sent: {transactionHash}. Waiting for confirmation...");
             var receipt = await WaitForTransactionReceipt(web3, transactionHash);
-            
+
             // Calculate the expected buy amount in human-readable format
-            var buyTokenDecimals = request.BuyTokenAddress == _appSettings.BrlaTokenAddress 
-                ? _appSettings.BrlaDecimals 
+            var buyTokenDecimals = request.BuyTokenAddress == _appSettings.BrlaTokenAddress
+                ? _appSettings.BrlaDecimals
                 : _appSettings.UsdcDecimals;
-            
+
             var buyAmount = BigInteger.Parse(quoteData.BuyAmount);
             var humanReadableBuyAmount = (decimal)buyAmount / (decimal)Math.Pow(10, buyTokenDecimals);
-            
+
             return new SwapResponse
             {
                 Success = receipt.Status.Value == 1,
@@ -156,26 +161,26 @@ namespace BrlaUsdcSwap.Services.Implementations
         public async Task<ApprovalResponse> GetApprovalDataAsync(ApprovalRequest request)
         {
             Console.WriteLine($"Getting approval data for {Name}...");
-            
+
             // If we're using Permit2, the approval needs to be for the Permit2 contract
             // For 0x v2, we need to approve the Permit2 contract as the spender
             var permitSpender = GetSpenderAddress(request.ChainId);
-            
+
             // Create web3 instance
             var web3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-            
+
             // Get token ABI
             var tokenAbi = GetTokenAbi(request.TokenAddress);
             var contract = web3.Eth.GetContract(tokenAbi, request.TokenAddress);
             var approveFunction = contract.GetFunction("approve");
-            
+
             // Get current gas price
             var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
-            
+
             // Convert amount to token decimals
             var tokenDecimals = GetTokenDecimals(request.TokenAddress);
             var approvalAmount = ConvertToTokenDecimals(request.Amount, tokenDecimals);
-            
+
             // Estimate gas for approval
             var estimatedGas = await approveFunction.EstimateGasAsync(
                 request.OwnerAddress,
@@ -183,10 +188,10 @@ namespace BrlaUsdcSwap.Services.Implementations
                 null,
                 permitSpender,
                 approvalAmount);
-            
+
             // Add 30% buffer to gas estimate
             var gasLimit = new HexBigInteger(estimatedGas.Value * 13 / 10);
-            
+
             // Create transaction data
             var txInput = new TransactionInput
             {
@@ -196,7 +201,7 @@ namespace BrlaUsdcSwap.Services.Implementations
                 Gas = gasLimit,
                 GasPrice = gasPrice
             };
-            
+
             return new ApprovalResponse
             {
                 Success = true,
@@ -208,31 +213,31 @@ namespace BrlaUsdcSwap.Services.Implementations
         public async Task<bool> NeedsApprovalAsync(ApprovalRequest request)
         {
             Console.WriteLine($"Checking if approval is needed for {Name}...");
-            
+
             // Get the permit2 contract address
             var permitSpender = GetSpenderAddress(request.ChainId);
-            
+
             // Create web3 instance
             var web3 = new Web3(_appSettings.Aggregator.PolygonRpcUrl);
-            
+
             // Get token contract
             var tokenAbi = GetTokenAbi(request.TokenAddress);
             var contract = web3.Eth.GetContract(tokenAbi, request.TokenAddress);
-            
+
             // Check allowance
             var allowanceFunction = contract.GetFunction("allowance");
             var allowance = await allowanceFunction.CallAsync<BigInteger>(
                 request.OwnerAddress,
                 permitSpender);
-            
+
             // Convert amount to token decimals
             var tokenDecimals = GetTokenDecimals(request.TokenAddress);
             var requiredAmount = ConvertToTokenDecimals(request.Amount, tokenDecimals);
-            
+
             // Check if allowance is sufficient
             bool needsApproval = allowance < requiredAmount;
             Console.WriteLine($"Current allowance: {allowance}, Required: {requiredAmount}, Needs approval: {needsApproval}");
-            
+
             return needsApproval;
         }
 
@@ -243,7 +248,7 @@ namespace BrlaUsdcSwap.Services.Implementations
         }
 
         #region Private Helper Methods
-        
+
         private BigInteger ConvertToTokenDecimals(decimal amount, int decimals)
         {
             if (decimals == 18)
@@ -259,97 +264,97 @@ namespace BrlaUsdcSwap.Services.Implementations
                 return (BigInteger)(amount * (decimal)Math.Pow(10, decimals));
             }
         }
-        
+
         private string GeneratePermit2Signature(object eip712Data, string privateKey)
         {
             Console.WriteLine("Generating Permit2 signature...");
-            
+
             // Convert EIP-712 data to proper format for signing
             var typedDataJson = JsonConvert.SerializeObject(eip712Data, new JsonSerializerSettings
             {
                 ContractResolver = new Newtonsoft.Json.Serialization.DefaultContractResolver(),
                 NullValueHandling = NullValueHandling.Ignore
             });
-            
+
             // Create signer - remove 0x prefix if present
             var typedDataSigner = new Eip712TypedDataSigner();
             var cleanPrivateKey = privateKey.StartsWith("0x") ? privateKey.Substring(2) : privateKey;
             var ethECKey = new EthECKey(cleanPrivateKey);
-            
+
             // Sign the data
             var signature = typedDataSigner.SignTypedDataV4(typedDataJson, ethECKey);
-            
+
             Console.WriteLine($"Permit2 signature generated: {signature.Substring(0, 10)}...");
-            
+
             return signature;
         }
-        
+
         private async Task<string> ExecuteSwapWithPermit2Signature(Web3 web3, ZeroExQuoteResponse quote, string permit2Signature)
         {
             Console.WriteLine("Executing swap with Permit2 signature...");
-            
+
             // Get the original transaction data
             string transactionData = quote.Transaction.Data;
-            
+
             // Handle signature prefixes
             string dataHex = transactionData.StartsWith("0x") ? transactionData.Substring(2) : transactionData;
             string signatureHex = permit2Signature.StartsWith("0x") ? permit2Signature.Substring(2) : permit2Signature;
-            
+
             // Calculate signature length in bytes
             int signatureLengthInBytes = signatureHex.Length / 2;
-            
+
             // Create a BigInteger for the length and convert to hex
             var signatureLengthBigInt = new BigInteger(signatureLengthInBytes);
-            
+
             // Convert to a hex string WITHOUT "0x" prefix, padded to 64 characters (32 bytes)
             string signatureLengthHex = signatureLengthBigInt.ToString("x").PadLeft(64, '0');
-            
+
             // Concatenate: original tx data + signature length (32 bytes) + signature
             string fullTransactionData = "0x" + dataHex + signatureLengthHex + signatureHex;
-            
+
             // Create the transaction input
             var txInput = new TransactionInput
             {
                 From = web3.TransactionManager.Account.Address,
                 To = quote.Transaction.To,
                 Data = fullTransactionData,
-                Value = new HexBigInteger(string.IsNullOrEmpty(quote.Transaction.Value) 
-                    ? BigInteger.Zero 
+                Value = new HexBigInteger(string.IsNullOrEmpty(quote.Transaction.Value)
+                    ? BigInteger.Zero
                     : BigInteger.Parse(quote.Transaction.Value)),
                 Gas = new HexBigInteger(BigInteger.Parse(quote.Transaction.Gas) * 12 / 10), // 20% buffer
                 GasPrice = new HexBigInteger(BigInteger.Parse(quote.Transaction.GasPrice))
             };
-            
+
             // Send the transaction
             return await web3.Eth.TransactionManager.SendTransactionAsync(txInput);
         }
-        
+
         private async Task<string> ExecuteStandardSwap(Web3 web3, ZeroExQuoteResponse quote)
         {
             Console.WriteLine("Executing standard swap...");
-            
+
             // Create the transaction input
             var txInput = new TransactionInput
             {
                 From = web3.TransactionManager.Account.Address,
                 To = quote.Transaction.To,
                 Data = quote.Transaction.Data,
-                Value = new HexBigInteger(string.IsNullOrEmpty(quote.Transaction.Value) 
-                    ? BigInteger.Zero 
+                Value = new HexBigInteger(string.IsNullOrEmpty(quote.Transaction.Value)
+                    ? BigInteger.Zero
                     : BigInteger.Parse(quote.Transaction.Value)),
                 Gas = new HexBigInteger(BigInteger.Parse(quote.Transaction.Gas) * 12 / 10), // 20% buffer
                 GasPrice = new HexBigInteger(BigInteger.Parse(quote.Transaction.GasPrice))
             };
-            
+
             // Send the transaction
             return await web3.Eth.TransactionManager.SendTransactionAsync(txInput);
         }
-        
+
         private async Task<TransactionReceipt> WaitForTransactionReceipt(Web3 web3, string transactionHash)
         {
             // Wait for the transaction to be mined
             var receipt = await web3.Eth.Transactions.GetTransactionReceipt.SendRequestAsync(transactionHash);
-            
+
             int attempts = 0;
             while (receipt == null && attempts < 30) // Limit to 30 attempts (2.5 minutes)
             {
@@ -358,15 +363,15 @@ namespace BrlaUsdcSwap.Services.Implementations
                 attempts++;
                 Console.WriteLine($"Waiting for receipt... Attempt {attempts}/30");
             }
-            
+
             if (receipt == null)
             {
                 throw new Exception("Transaction is taking too long to be mined.");
             }
-            
+
             return receipt;
         }
-        
+
         private string GetTokenAbi(string tokenAddress)
         {
             // Return the appropriate ABI based on the token address
@@ -378,10 +383,10 @@ namespace BrlaUsdcSwap.Services.Implementations
             {
                 return @"[{""constant"":true,""inputs"":[{""name"":""_owner"",""type"":""address""},{""name"":""_spender"",""type"":""address""}],""name"":""allowance"",""outputs"":[{""name"":""remaining"",""type"":""uint256""}],""type"":""function""},{""constant"":false,""inputs"":[{""name"":""_spender"",""type"":""address""},{""name"":""_value"",""type"":""uint256""}],""name"":""approve"",""outputs"":[{""name"":""success"",""type"":""bool""}],""type"":""function""}]";
             }
-            
+
             throw new ArgumentException($"ABI not found for token address: {tokenAddress}");
         }
-        
+
         private int GetTokenDecimals(string tokenAddress)
         {
             // Return the appropriate decimals for the token
@@ -393,10 +398,10 @@ namespace BrlaUsdcSwap.Services.Implementations
             {
                 return _appSettings.UsdcDecimals;
             }
-            
+
             throw new ArgumentException($"Decimals not found for token address: {tokenAddress}");
         }
-        
+
         #endregion
     }
 }
