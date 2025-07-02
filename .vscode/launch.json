@@ -6,7 +6,7 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net6.0/BrlaUsdcSwap.dll",
+            "program": "${workspaceFolder}/bin/Debug/net8.0/BrlaUsdcSwap.dll",
             "args": [],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
@@ -17,8 +17,11 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net6.0/BrlaUsdcSwap.dll",
-            "args": ["10", "1"],
+            "program": "${workspaceFolder}/bin/Debug/net8.0/BrlaUsdcSwap.dll",
+            "args": [
+                "10",
+                "1"
+            ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "stopAtEntry": false
@@ -28,8 +31,11 @@
             "type": "coreclr",
             "request": "launch",
             "preLaunchTask": "build",
-            "program": "${workspaceFolder}/bin/Debug/net6.0/BrlaUsdcSwap.dll",
-            "args": ["50", "2"],
+            "program": "${workspaceFolder}/bin/Debug/net8.0/BrlaUsdcSwap.dll",
+            "args": [
+                "50",
+                "2"
+            ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             "stopAtEntry": false
