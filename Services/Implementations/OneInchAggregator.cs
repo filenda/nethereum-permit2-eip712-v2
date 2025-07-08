@@ -67,15 +67,25 @@ namespace BrlaUsdcSwap.Services.Implementations
             // Build the URL for 1inch (v6.0 API)
             string baseUrl = $"{_appSettings.Aggregator.OneInchApiBaseUrl}/v6.0/{request.ChainId}";
             
+            //TODO: Remove this delay when going to prod
+            await Task.Delay(1000); // Add delay to respect 1inch API rate limit
+            
             // Make the request
+            Console.WriteLine($"Requesting quote from: {baseUrl}/quote?{queryParams}");
             var response = await _httpClient.GetAsync($"{baseUrl}/quote?{queryParams}");
-            response.EnsureSuccessStatusCode();
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                throw new Exception($"1inch API error: {response.StatusCode} - {errorContent}");
+            }
 
             // Parse the response
             var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Raw response: {content}");
             var oneInchQuote = JsonConvert.DeserializeObject<OneInchQuoteResponse>(content);
 
-            // Extract sources from protocols
+            // Extract sources - might be null if protocol information is not included
             var sources = new List<string>();
             if (oneInchQuote.Protocols != null)
             {
@@ -93,19 +103,33 @@ namespace BrlaUsdcSwap.Services.Implementations
                     }
                 }
             }
+            else
+            {
+                // Default source if protocols info not available
+                sources.Add("1inch");
+            }
 
             // Get gas price
             var web3 = new Web3(_appSettings.Aggregator.PolygonRpcUrl);
             var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
+
+            // Use appropriate amount values based on available response fields
+            string buyAmount = oneInchQuote.DstAmount ?? oneInchQuote.ToAmount ?? "0";
+            string sellAmount = oneInchQuote.SrcAmount ?? oneInchQuote.FromAmount ?? sellAmountInWei.ToString();
+            
+            // Estimate gas if not provided
+            long estimatedGas = oneInchQuote.EstimatedGas > 0 ? 
+                oneInchQuote.EstimatedGas : 
+                250000; // Default value if not provided
 
             // Convert to standard QuoteResponse
             var standardResponse = new QuoteResponse
             {
                 SellTokenAddress = request.SellTokenAddress,
                 BuyTokenAddress = request.BuyTokenAddress,
-                SellAmount = oneInchQuote.FromAmount,
-                BuyAmount = oneInchQuote.ToAmount,
-                EstimatedGas = oneInchQuote.EstimatedGas.ToString(),
+                SellAmount = sellAmount,
+                BuyAmount = buyAmount,
+                EstimatedGas = estimatedGas.ToString(),
                 GasPrice = gasPrice.Value.ToString(),
                 RequiresApproval = true, // We'll check this separately
                 ProtocolFee = "0", // 1inch doesn't show protocol fees in quote
@@ -139,31 +163,56 @@ namespace BrlaUsdcSwap.Services.Implementations
             {
                 Console.WriteLine("Token approval needed. Sending approval transaction...");
                 
-                // Get approval data
-                var approvalResponse = await GetApprovalDataAsync(approvalRequest);
-                
-                // Create web3 instance for sending transactions
-                var approvalWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-                
-                // Send approval transaction
-                var approvalTxInput = (TransactionInput)approvalResponse.RawTransaction;
-                var approvalTxHash = await approvalWeb3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
-                
-                Console.WriteLine($"Approval transaction sent: {approvalTxHash}. Waiting for confirmation...");
-                
-                // Wait for approval to be mined
-                var approvalReceipt = await WaitForTransactionReceipt(approvalWeb3, approvalTxHash);
-                if (approvalReceipt.Status.Value != 1)
+                try
                 {
-                    return new SwapResponse
+                    // Get approval data
+                    var approvalResponse = await GetApprovalDataAsync(approvalRequest);
+                    
+                    // Create web3 instance for sending transactions
+                    var approvalWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
+                    
+                    // Send approval transaction
+                    var approvalTxInput = (TransactionInput)approvalResponse.RawTransaction;
+                    
+                    // Log details before sending
+                    Console.WriteLine($"Sending approval transaction: To={approvalTxInput.To}, From={approvalTxInput.From}");
+                    Console.WriteLine($"Gas: {approvalTxInput.Gas.Value}, GasPrice: {approvalTxInput.GasPrice.Value}");
+                    
+                    var approvalTxHash = await approvalWeb3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
+                    
+                    Console.WriteLine($"Approval transaction sent: {approvalTxHash}. Waiting for confirmation...");
+                    
+                    // Wait for approval to be mined
+                    var approvalReceipt = await WaitForTransactionReceipt(approvalWeb3, approvalTxHash);
+                    if (approvalReceipt.Status.Value != 1)
                     {
-                        Success = false,
-                        ErrorMessage = "Approval transaction failed",
-                        TransactionHash = approvalTxHash
-                    };
+                        return new SwapResponse
+                        {
+                            Success = false,
+                            ErrorMessage = "Approval transaction failed",
+                            TransactionHash = approvalTxHash
+                        };
+                    }
+                    
+                    Console.WriteLine("Approval confirmed successfully. Proceeding with swap...");
                 }
-                
-                Console.WriteLine("Approval confirmed successfully. Proceeding with swap...");
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error during approval: {ex.Message}");
+                    
+                    // Sleep briefly to allow for potential blockchain state changes
+                    await Task.Delay(2000);
+                    
+                    // Check again if approval is needed (might have been approved elsewhere)
+                    if (await NeedsApprovalAsync(approvalRequest))
+                    {
+                        throw new Exception($"Approval failed and still needed: {ex.Message}", ex);
+                    }
+                    else
+                    {
+                        Console.WriteLine("Approval appears to be in place despite error. Proceeding with swap...");
+                    }
+                }
             }
             
             // Now, get the swap transaction
@@ -186,6 +235,9 @@ namespace BrlaUsdcSwap.Services.Implementations
             
             Console.WriteLine("Requesting swap transaction data from 1inch...");
             
+            //TODO: Remove this delay when going to prod
+            await Task.Delay(1000); // Add delay to respect 1inch API rate limit
+            
             // Make the request
             var response = await _httpClient.GetAsync($"{baseUrl}/swap?{queryParams}");
             
@@ -197,12 +249,17 @@ namespace BrlaUsdcSwap.Services.Implementations
             
             // Parse the response
             var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Raw swap response: {content}");
             var swapResponse = JsonConvert.DeserializeObject<OneInchSwapResponse>(content);
             
             // Execute the transaction
             var swapWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
             
             Console.WriteLine("Sending swap transaction...");
+            
+            // Get current gas price with a premium (1.1x)
+            var gasPrice = await swapWeb3.Eth.GasPrice.SendRequestAsync();
+            var gasPriceWithPremium = new HexBigInteger(gasPrice.Value * 11 / 10);
             
             // Create transaction input
             var swapTxInput = new TransactionInput
@@ -211,9 +268,13 @@ namespace BrlaUsdcSwap.Services.Implementations
                 To = swapResponse.Tx.To,
                 Data = swapResponse.Tx.Data,
                 Value = new HexBigInteger(BigInteger.Parse(swapResponse.Tx.Value ?? "0")),
-                Gas = new HexBigInteger(swapResponse.Tx.Gas * 12 / 10), // Adding 20% buffer
-                GasPrice = new HexBigInteger(BigInteger.Parse(swapResponse.Tx.GasPrice))
+                Gas = new HexBigInteger(swapResponse.Tx.Gas * 13 / 10), // Adding 30% buffer
+                GasPrice = gasPriceWithPremium
             };
+            
+            // Log details before sending
+            Console.WriteLine($"Swap transaction details: To={swapTxInput.To}, From={swapTxInput.From}");
+            Console.WriteLine($"Gas: {swapTxInput.Gas.Value}, GasPrice: {swapTxInput.GasPrice.Value}");
             
             // Send the transaction
             var txHash = await swapWeb3.Eth.TransactionManager.SendTransactionAsync(swapTxInput);
@@ -228,7 +289,7 @@ namespace BrlaUsdcSwap.Services.Implementations
                 ? _appSettings.BrlaDecimals 
                 : _appSettings.UsdcDecimals;
             
-            var buyAmount = BigInteger.Parse(swapResponse.ToAmount);
+            var buyAmount = BigInteger.Parse(swapResponse.ToAmount ?? "0");
             var humanReadableBuyAmount = (decimal)buyAmount / (decimal)Math.Pow(10, buyTokenDecimals);
             
             return new SwapResponse
@@ -250,23 +311,43 @@ namespace BrlaUsdcSwap.Services.Implementations
             // Build query parameters for approval
             var queryParams = HttpUtility.ParseQueryString(string.Empty);
             queryParams["tokenAddress"] = request.TokenAddress;
-            queryParams["amount"] = ConvertToTokenDecimals(request.Amount, GetTokenDecimals(request.TokenAddress)).ToString();
+            
+            // For 1inch, we need to use a large number for infinity approval
+            // Use max uint256 value for unlimited approval
+            BigInteger maxApproval = BigInteger.Parse("115792089237316195423570985008687907853269984665640564039457584007913129639935");
+            queryParams["amount"] = maxApproval.ToString();
             
             // Build the URL for 1inch
             string baseUrl = $"{_appSettings.Aggregator.OneInchApiBaseUrl}/v6.0/{request.ChainId}";
             
+            //TODO: Remove this delay when going to prod
+            await Task.Delay(1000); // Add delay to respect 1inch API rate limit
+            
             // Make the request
+            Console.WriteLine($"Requesting approval transaction from: {baseUrl}/approve/transaction?{queryParams}");
             var response = await _httpClient.GetAsync($"{baseUrl}/approve/transaction?{queryParams}");
             
             if (!response.IsSuccessStatusCode)
             {
                 var errorContent = await response.Content.ReadAsStringAsync();
-                throw new Exception($"1inch approval API error: {errorContent}");
+                throw new Exception($"1inch approval API error: {response.StatusCode} - {errorContent}");
             }
             
             // Parse the response
             var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Raw approval response: {content}");
             var approveResponse = JsonConvert.DeserializeObject<OneInchApproveResponse>(content);
+            
+            // Create web3 instance for gas estimation
+            var web3 = new Web3(_appSettings.Aggregator.PolygonRpcUrl);
+            
+            // Get current gas price with a small premium (1.1x)
+            var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
+            var gasPriceWithPremium = new HexBigInteger(gasPrice.Value * 11 / 10);
+            
+            //TODO: Use dynamic estimations by using eth_estimateGas RPC method instead of fixed values
+            // Use a fixed gas limit for approvals which should be safe
+            var gasLimit = new HexBigInteger(100000);
             
             // Create transaction input
             var txInput = new TransactionInput
@@ -274,10 +355,12 @@ namespace BrlaUsdcSwap.Services.Implementations
                 From = request.OwnerAddress,
                 To = approveResponse.To,
                 Data = approveResponse.Data,
-                Value = new HexBigInteger(BigInteger.Parse(approveResponse.Value ?? "0")),
-                Gas = new HexBigInteger(approveResponse.Gas * 12 / 10), // Adding 20% buffer
-                GasPrice = new HexBigInteger(BigInteger.Parse(approveResponse.GasPrice))
+                Value = new HexBigInteger(0),
+                Gas = gasLimit,
+                GasPrice = gasPriceWithPremium
             };
+            
+            Console.WriteLine($"Approval transaction prepared: To={txInput.To}, Gas={txInput.Gas.Value}, GasPrice={txInput.GasPrice.Value}");
             
             return new ApprovalResponse
             {
@@ -298,6 +381,9 @@ namespace BrlaUsdcSwap.Services.Implementations
             
             // Build the URL for 1inch
             string baseUrl = $"{_appSettings.Aggregator.OneInchApiBaseUrl}/v6.0/{request.ChainId}";
+            
+            //TODO: Remove this delay when going to prod
+            await Task.Delay(1000); // Add delay to respect 1inch API rate limit
             
             // Make the request
             var response = await _httpClient.GetAsync($"{baseUrl}/approve/allowance?{queryParams}");
@@ -397,6 +483,12 @@ namespace BrlaUsdcSwap.Services.Implementations
     
     public class OneInchQuoteResponse
     {
+        [JsonProperty("dstAmount")]
+        public string DstAmount { get; set; }
+        
+        [JsonProperty("srcAmount")]
+        public string SrcAmount { get; set; }
+        
         [JsonProperty("toAmount")]
         public string ToAmount { get; set; }
 
