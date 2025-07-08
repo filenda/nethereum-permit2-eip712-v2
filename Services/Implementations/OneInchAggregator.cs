@@ -68,14 +68,21 @@ namespace BrlaUsdcSwap.Services.Implementations
             string baseUrl = $"{_appSettings.Aggregator.OneInchApiBaseUrl}/v6.0/{request.ChainId}";
             
             // Make the request
+            Console.WriteLine($"Requesting quote from: {baseUrl}/quote?{queryParams}");
             var response = await _httpClient.GetAsync($"{baseUrl}/quote?{queryParams}");
-            response.EnsureSuccessStatusCode();
+            
+            if (!response.IsSuccessStatusCode)
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                throw new Exception($"1inch API error: {response.StatusCode} - {errorContent}");
+            }
 
             // Parse the response
             var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Raw response: {content}");
             var oneInchQuote = JsonConvert.DeserializeObject<OneInchQuoteResponse>(content);
 
-            // Extract sources from protocols
+            // Extract sources - might be null if protocol information is not included
             var sources = new List<string>();
             if (oneInchQuote.Protocols != null)
             {
@@ -93,19 +100,33 @@ namespace BrlaUsdcSwap.Services.Implementations
                     }
                 }
             }
+            else
+            {
+                // Default source if protocols info not available
+                sources.Add("1inch");
+            }
 
             // Get gas price
             var web3 = new Web3(_appSettings.Aggregator.PolygonRpcUrl);
             var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
+
+            // Use appropriate amount values based on available response fields
+            string buyAmount = oneInchQuote.DstAmount ?? oneInchQuote.ToAmount ?? "0";
+            string sellAmount = oneInchQuote.SrcAmount ?? oneInchQuote.FromAmount ?? sellAmountInWei.ToString();
+            
+            // Estimate gas if not provided
+            long estimatedGas = oneInchQuote.EstimatedGas > 0 ? 
+                oneInchQuote.EstimatedGas : 
+                250000; // Default value if not provided
 
             // Convert to standard QuoteResponse
             var standardResponse = new QuoteResponse
             {
                 SellTokenAddress = request.SellTokenAddress,
                 BuyTokenAddress = request.BuyTokenAddress,
-                SellAmount = oneInchQuote.FromAmount,
-                BuyAmount = oneInchQuote.ToAmount,
-                EstimatedGas = oneInchQuote.EstimatedGas.ToString(),
+                SellAmount = sellAmount,
+                BuyAmount = buyAmount,
+                EstimatedGas = estimatedGas.ToString(),
                 GasPrice = gasPrice.Value.ToString(),
                 RequiresApproval = true, // We'll check this separately
                 ProtocolFee = "0", // 1inch doesn't show protocol fees in quote
@@ -397,6 +418,12 @@ namespace BrlaUsdcSwap.Services.Implementations
     
     public class OneInchQuoteResponse
     {
+        [JsonProperty("dstAmount")]
+        public string DstAmount { get; set; }
+        
+        [JsonProperty("srcAmount")]
+        public string SrcAmount { get; set; }
+        
         [JsonProperty("toAmount")]
         public string ToAmount { get; set; }
 
