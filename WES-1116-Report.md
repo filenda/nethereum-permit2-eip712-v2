@@ -56,11 +56,35 @@ The existing Nethereum PoC was originally built using 0x Protocol for DEX aggreg
 - ✅ **Gas optimization features** - Chi gas token and optimization algorithms can reduce gas costs by up to 40%
 - ✅ **Competitive advantage** - No on-top fees ensure users get the best possible rates
 
+**1inch Infrastructure Fees (Classic Swap API):**
+Infrastructure fees apply to all prepaid plans, exclusively for Classic Swap API transactions. These fees are deducted from the destination amount of each completed Network Request and are distinct from subscription fees.
+
+| Plan     | Fees for stable coins | Fees for non-stable coins |
+|----------|----------------------|---------------------------|
+| Dev      | 10 bps               | 30 bps                    |
+| Startup  | 7 bps                | 20 bps                    |
+| Pro      | 4 bps                | 10 bps                    |
+| Business | 2 bps                | 5 bps                     |
+
 **0x Protocol:**
 - ⚠️ **Selective protocol fees** - 0x charges a 0.15% fee on swaps involving select token pairs (standard plan)
 - ✅ **Network fees only for most pairs** - Many token pairs have no additional protocol fees
 - ✅ **Custom pricing available** - High volume teams can negotiate custom fee structures
 - ℹ️ **Fee transparency** - Protocol fees are charged on-chain during transactions when applicable
+
+**0x Pricing Plans:**
+
+| Feature                   | Free    | Starter | Growth   | Enterprise |
+|---------------------------|---------|---------|----------|------------|
+| Monthly API calls         | 1M      | 3M      | 6M       | Custom     |
+| Additional API calls (per M) | -     | $500    | $500     | $500       |
+| Apps                      | 1       | 1       | 5        | Unlimited  |
+| On-chain swap fee         | 15 bps  | 15 bps  | 0 bps    | 10 bps     |
+| Performance               |         |         |          |            |
+| RPS (per app)             | 1 RPS   | 2 RPS   | 25 RPS   | Custom     |
+| 99% Uptime SLA            | ✓       | ✓       | ✓        | ✓          |
+| Support                   |         |         |          |            |
+| Priority support          | -       | -       | ✓        | ✓          |
 
 ### Network Gas Fees (Polygon)
 
@@ -68,7 +92,12 @@ Both protocols only charge standard Polygon network gas fees:
 - **0x Transaction:** 0.0056 POL ($0.0011)
 - **1inch Transaction:** 0.0053 POL ($0.0011)
 
-**Key Finding:** Both protocols have comparable gas costs with minimal difference in network fees. However, 0x may charge additional 0.15% protocol fees on select token pairs, while 1inch has no protocol fees on any pairs.
+**Key Finding:** Both protocols have comparable gas costs with minimal difference in network fees. However, fee structures differ significantly:
+
+- **1inch**: Infrastructure fees range from 2-10 bps for stable coins and 5-30 bps for non-stable coins depending on plan tier
+- **0x**: On-chain swap fees range from 0 bps (Growth plan) to 15 bps (Free/Starter plans), with Enterprise at 10 bps
+
+For high-volume usage, 0x Growth plan offers 0 bps fees while 1inch Business plan charges 2-5 bps. For lower volume usage, both protocols have similar fee structures.
 
 ## Performance Comparison
 
@@ -142,9 +171,20 @@ Both protocols only charge standard Polygon network gas fees:
 
 ## Conclusion
 
-Both 1inch and 0x Protocol provide excellent DEX aggregation capabilities. While 0x may charge 0.15% protocol fees on select token pairs, 1inch guarantees no protocol fees on any pairs. Additionally, 1inch offers superior gas optimization, better user experience through built-in approval management, and a more developer-friendly API structure.
+Both 1inch and 0x Protocol provide excellent DEX aggregation capabilities with nuanced fee structures:
 
-The implementation successfully demonstrates that 1inch can serve as a robust alternative to 0x Protocol, with measurable benefits in gas efficiency and user experience.
+**Fee Comparison:**
+- **0x Protocol**: Offers 0 bps fees on Growth plan ($500/month for 6M calls), 15 bps on Free/Starter plans
+- **1inch Protocol**: Infrastructure fees of 2-10 bps (stable coins) and 5-30 bps (non-stable coins) across all plans
+
+**Strategic Considerations:**
+- **High Volume**: 0x Growth plan provides the most cost-effective solution with 0 bps fees
+- **Medium Volume**: Both protocols offer competitive pricing with similar fee structures
+- **Low Volume**: 1inch may be more cost-effective due to lower entry-level fees and no monthly subscription requirements
+
+Additionally, 1inch offers superior gas optimization, better user experience through built-in approval management, and a more developer-friendly API structure.
+
+The implementation successfully demonstrates that both protocols serve as viable solutions, with the optimal choice depending on transaction volume, fee sensitivity, and technical requirements.
 
 ## Verification
 
