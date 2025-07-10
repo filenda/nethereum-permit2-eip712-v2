@@ -147,6 +147,9 @@ namespace BrlaUsdcSwap.Services.Implementations
         {
             Console.WriteLine($"Executing swap with {Name}...");
             
+            // Create a single Web3 instance to avoid nonce conflicts
+            var web3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
+            
             // First, check if approval is needed
             var spenderAddress = GetSpenderAddress(request.ChainId);
             var approvalRequest = new ApprovalRequest
@@ -168,9 +171,6 @@ namespace BrlaUsdcSwap.Services.Implementations
                     // Get approval data
                     var approvalResponse = await GetApprovalDataAsync(approvalRequest);
                     
-                    // Create web3 instance for sending transactions
-                    var approvalWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-                    
                     // Send approval transaction
                     var approvalTxInput = (TransactionInput)approvalResponse.RawTransaction;
                     
@@ -178,12 +178,12 @@ namespace BrlaUsdcSwap.Services.Implementations
                     Console.WriteLine($"Sending approval transaction: To={approvalTxInput.To}, From={approvalTxInput.From}");
                     Console.WriteLine($"Gas: {approvalTxInput.Gas.Value}, GasPrice: {approvalTxInput.GasPrice.Value}");
                     
-                    var approvalTxHash = await approvalWeb3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
+                    var approvalTxHash = await web3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
                     
                     Console.WriteLine($"Approval transaction sent: {approvalTxHash}. Waiting for confirmation...");
                     
                     // Wait for approval to be mined
-                    var approvalReceipt = await WaitForTransactionReceipt(approvalWeb3, approvalTxHash);
+                    var approvalReceipt = await WaitForTransactionReceipt(web3, approvalTxHash);
                     if (approvalReceipt.Status.Value != 1)
                     {
                         return new SwapResponse
@@ -253,12 +253,10 @@ namespace BrlaUsdcSwap.Services.Implementations
             var swapResponse = JsonConvert.DeserializeObject<OneInchSwapResponse>(content);
             
             // Execute the transaction
-            var swapWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-            
             Console.WriteLine("Sending swap transaction...");
             
             // Get current gas price with a premium (1.1x)
-            var gasPrice = await swapWeb3.Eth.GasPrice.SendRequestAsync();
+            var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
             var gasPriceWithPremium = new HexBigInteger(gasPrice.Value * 11 / 10);
             
             // Default gas limit with buffer (30% above what 1inch suggests)
@@ -278,7 +276,7 @@ namespace BrlaUsdcSwap.Services.Implementations
             try
             {
                 // Estimate gas for the swap transaction
-                var estimatedGas = await swapWeb3.Eth.Transactions.EstimateGas.SendRequestAsync(transactionForEstimation);
+                var estimatedGas = await web3.Eth.Transactions.EstimateGas.SendRequestAsync(transactionForEstimation);
                 
                 // Add a 30% buffer to the estimation to ensure success
                 var gasWithBuffer = new HexBigInteger(estimatedGas.Value * 13 / 10);
@@ -318,12 +316,12 @@ namespace BrlaUsdcSwap.Services.Implementations
             Console.WriteLine($"Gas: {swapTxInput.Gas.Value}, GasPrice: {swapTxInput.GasPrice.Value}");
             
             // Send the transaction
-            var txHash = await swapWeb3.Eth.TransactionManager.SendTransactionAsync(swapTxInput);
+            var txHash = await web3.Eth.TransactionManager.SendTransactionAsync(swapTxInput);
             
             Console.WriteLine($"Transaction sent: {txHash}. Waiting for confirmation...");
             
             // Wait for receipt and verify success
-            var receipt = await WaitForTransactionReceipt(swapWeb3, txHash);
+            var receipt = await WaitForTransactionReceipt(web3, txHash);
             
             // Calculate the expected buy amount in human-readable format
             var buyTokenDecimals = request.BuyTokenAddress == _appSettings.BrlaTokenAddress 
