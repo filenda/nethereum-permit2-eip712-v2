@@ -116,21 +116,39 @@ namespace BrlaUsdcSwap.Services.Implementations
 
             string transactionHash;
 
-            // Check if this is a Permit2 transaction
+            // Check if Permit2 is present and requires signing
+            string permit2Signature = null;
             if (quoteData.Permit2?.Eip712 != null)
             {
-                Console.WriteLine("Using Permit2 signature for one-transaction swap...");
+                Console.WriteLine("Quote contains Permit2 data, generating signature...");
+                permit2Signature = GeneratePermit2Signature(quoteData.Permit2.Eip712, request.PrivateKey);
+                Console.WriteLine($"Permit2 signature generated: {permit2Signature}");
+            }
 
-                // Generate Permit2 signature
-                var signature = GeneratePermit2Signature(quoteData.Permit2.Eip712, request.PrivateKey);
+            // Check and handle approval if needed (same logic as SwapService)
+            // Only do regular approval if Permit2 isn't being used
+            if (quoteData.Issues?.Allowance != null)
+            {
+                var sellAmountWei = new BigInteger(decimal.Parse(quoteData.SellAmount));
+                
+                // Use spender from allowance issue, fallback to Permit2 contract if null
+                string spenderAddress = !string.IsNullOrEmpty(quoteData.Issues.Allowance.Spender) 
+                    ? quoteData.Issues.Allowance.Spender 
+                    : GetSpenderAddress(request.ChainId);
+                
+                Console.WriteLine($"Using spender address: {spenderAddress}");
+                await ApproveTokenSpendingAsync(request.SellTokenAddress, spenderAddress, sellAmountWei, request.PrivateKey);
+            }
 
-                // Execute with signature
-                transactionHash = await ExecuteSwapWithPermit2Signature(web3, quoteData, signature);
+            // Execute the swap transaction
+            if (permit2Signature != null)
+            {
+                // Execute swap with Permit2 signature
+                transactionHash = await ExecuteSwapWithPermit2Signature(web3, quoteData, permit2Signature);
             }
             else
             {
-                // Standard swap (requires prior approval)
-                Console.WriteLine("Using standard transaction (separate approval required)...");
+                // Execute standard swap without Permit2
                 transactionHash = await ExecuteStandardSwap(web3, quoteData);
             }
 
@@ -245,6 +263,176 @@ namespace BrlaUsdcSwap.Services.Implementations
         {
             // For 0x v2, this is the Permit2 contract address
             return "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+        }
+
+        public async Task ApproveTokenSpendingAsync(ApprovalRequest request)
+        {
+            Console.WriteLine($"Approving token spending for {Name}...");
+
+            // Get the permit2 contract address
+            var permitSpender = GetSpenderAddress(request.ChainId);
+
+            // Create web3 instance
+            var web3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
+
+            // Get token contract
+            var tokenAbi = GetTokenAbi(request.TokenAddress);
+            var contract = web3.Eth.GetContract(tokenAbi, request.TokenAddress);
+
+            // Convert amount to token decimals
+            var tokenDecimals = GetTokenDecimals(request.TokenAddress);
+            var approvalAmount = ConvertToTokenDecimals(request.Amount, tokenDecimals);
+
+            // Get approve function
+            var approveFunction = contract.GetFunction("approve");
+
+            try
+            {
+                // Get current gas price
+                var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
+                Console.WriteLine($"Current gas price: {gasPrice.Value} wei");
+
+                // Estimate gas for approval
+                var estimatedGas = await approveFunction.EstimateGasAsync(
+                    request.OwnerAddress,
+                    null,
+                    null,
+                    permitSpender,
+                    approvalAmount);
+
+                // Add 30% buffer to the estimated gas
+                var gasLimit = new HexBigInteger(estimatedGas.Value * 13 / 10);
+
+                Console.WriteLine($"Estimated gas for approval: {estimatedGas.Value}");
+                Console.WriteLine($"Gas limit with buffer: {gasLimit.Value}");
+
+                // Send approval transaction
+                var approveTxHash = await approveFunction.SendTransactionAsync(
+                    request.OwnerAddress,
+                    gasLimit,
+                    gasPrice,
+                    null,
+                    permitSpender,
+                    approvalAmount);
+
+                Console.WriteLine($"Approval transaction sent: {approveTxHash}");
+                
+                // Wait for approval transaction to be mined
+                var receipt = await WaitForTransactionReceipt(web3, approveTxHash);
+                
+                if (receipt.Status.Value != 1)
+                {
+                    throw new Exception("Approval transaction failed on-chain");
+                }
+                
+                Console.WriteLine("Token approval successful!");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error during token approval: {ex.Message}");
+                if (ex.InnerException != null)
+                {
+                    Console.WriteLine($"Inner exception: {ex.InnerException.Message}");
+                }
+                throw new Exception("Token approval failed", ex);
+            }
+        }
+
+        private async Task ApproveTokenSpendingAsync(string tokenAddress, string spenderAddress, BigInteger amount, string privateKey)
+        {
+            Console.WriteLine("Checking token allowance...");
+
+            // Create web3 instance
+            var web3 = new Web3(new Nethereum.Web3.Accounts.Account(privateKey), _appSettings.Aggregator.PolygonRpcUrl);
+
+            // Get token ABI
+            var tokenAbi = GetTokenAbi(tokenAddress);
+            var contract = web3.Eth.GetContract(tokenAbi, tokenAddress);
+
+            // Get allowance function
+            var allowanceFunction = contract.GetFunction("allowance");
+            var allowance = await allowanceFunction.CallAsync<BigInteger>(
+                web3.TransactionManager.Account.Address,
+                spenderAddress);
+
+            Console.WriteLine($"Current allowance: {allowance}");
+
+            // If allowance is less than the amount we want to sell, approve
+            if (allowance < amount)
+            {
+                Console.WriteLine("Approving token spending...");
+
+                // Get approve function
+                var approveFunction = contract.GetFunction("approve");
+                string approveTxHash;
+
+                try
+                {
+                    // Get current gas price
+                    var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
+                    Console.WriteLine($"Current gas price: {gasPrice.Value} wei");
+
+                    try
+                    {
+                        // Try to estimate gas first (for better accuracy)
+                        var estimatedGas = await approveFunction.EstimateGasAsync(
+                            web3.TransactionManager.Account.Address,
+                            null,
+                            null,
+                            spenderAddress,
+                            amount);
+
+                        // Add 30% buffer to the estimated gas
+                        var gasLimit = new HexBigInteger(estimatedGas.Value * 13 / 10);
+
+                        Console.WriteLine($"Estimated gas for approval: {estimatedGas.Value}");
+                        Console.WriteLine($"Gas limit with buffer: {gasLimit.Value}");
+
+                        // Send with explicit parameters
+                        approveTxHash = await approveFunction.SendTransactionAsync(
+                            web3.TransactionManager.Account.Address,
+                            gasLimit,
+                            gasPrice,
+                            null,
+                            spenderAddress,
+                            amount);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error during gas estimation: {ex.Message}");
+
+                        // Fallback to fixed gas limit if estimation fails
+                        Console.WriteLine("Using fallback fixed gas limit of 100000");
+                        var gasLimit = new HexBigInteger(100000);
+
+                        approveTxHash = await approveFunction.SendTransactionAsync(
+                            web3.TransactionManager.Account.Address,
+                            gasLimit,
+                            gasPrice,
+                            null,
+                            spenderAddress,
+                            amount);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Failed to send approval transaction: {ex.Message}");
+                    if (ex.InnerException != null)
+                    {
+                        Console.WriteLine($"Inner exception: {ex.InnerException.Message}");
+                    }
+                    throw new Exception("Token approval transaction failed to send", ex);
+                }
+
+                Console.WriteLine($"Approval transaction sent: {approveTxHash}");
+                var receipt = await WaitForTransactionReceipt(web3, approveTxHash);
+                
+                Console.WriteLine("Token approval successful!");
+            }
+            else
+            {
+                Console.WriteLine("Token allowance is sufficient, no approval needed");
+            }
         }
 
         #region Private Helper Methods

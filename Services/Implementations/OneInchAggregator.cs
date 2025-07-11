@@ -147,6 +147,9 @@ namespace BrlaUsdcSwap.Services.Implementations
         {
             Console.WriteLine($"Executing swap with {Name}...");
             
+            // Create a single Web3 instance to avoid nonce conflicts
+            var web3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
+            
             // First, check if approval is needed
             var spenderAddress = GetSpenderAddress(request.ChainId);
             var approvalRequest = new ApprovalRequest
@@ -168,9 +171,6 @@ namespace BrlaUsdcSwap.Services.Implementations
                     // Get approval data
                     var approvalResponse = await GetApprovalDataAsync(approvalRequest);
                     
-                    // Create web3 instance for sending transactions
-                    var approvalWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-                    
                     // Send approval transaction
                     var approvalTxInput = (TransactionInput)approvalResponse.RawTransaction;
                     
@@ -178,12 +178,12 @@ namespace BrlaUsdcSwap.Services.Implementations
                     Console.WriteLine($"Sending approval transaction: To={approvalTxInput.To}, From={approvalTxInput.From}");
                     Console.WriteLine($"Gas: {approvalTxInput.Gas.Value}, GasPrice: {approvalTxInput.GasPrice.Value}");
                     
-                    var approvalTxHash = await approvalWeb3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
+                    var approvalTxHash = await web3.Eth.TransactionManager.SendTransactionAsync(approvalTxInput);
                     
                     Console.WriteLine($"Approval transaction sent: {approvalTxHash}. Waiting for confirmation...");
                     
                     // Wait for approval to be mined
-                    var approvalReceipt = await WaitForTransactionReceipt(approvalWeb3, approvalTxHash);
+                    var approvalReceipt = await WaitForTransactionReceipt(web3, approvalTxHash);
                     if (approvalReceipt.Status.Value != 1)
                     {
                         return new SwapResponse
@@ -253,13 +253,52 @@ namespace BrlaUsdcSwap.Services.Implementations
             var swapResponse = JsonConvert.DeserializeObject<OneInchSwapResponse>(content);
             
             // Execute the transaction
-            var swapWeb3 = new Web3(new Nethereum.Web3.Accounts.Account(request.PrivateKey), _appSettings.Aggregator.PolygonRpcUrl);
-            
             Console.WriteLine("Sending swap transaction...");
             
             // Get current gas price with a premium (1.1x)
-            var gasPrice = await swapWeb3.Eth.GasPrice.SendRequestAsync();
+            var gasPrice = await web3.Eth.GasPrice.SendRequestAsync();
             var gasPriceWithPremium = new HexBigInteger(gasPrice.Value * 11 / 10);
+            
+            // Default gas limit with buffer (30% above what 1inch suggests)
+            var gasLimit = new HexBigInteger(swapResponse.Tx.Gas * 13 / 10);
+            
+            
+            // DYNAMIC GAS ESTIMATION - Uncomment this section to use dynamic gas estimation
+            // Create a transaction object for gas estimation
+            var transactionForEstimation = new Nethereum.RPC.Eth.DTOs.CallInput
+            {
+                From = request.WalletAddress,
+                To = swapResponse.Tx.To,
+                Data = swapResponse.Tx.Data,
+                Value = new HexBigInteger(BigInteger.Parse(swapResponse.Tx.Value ?? "0"))
+            };
+            
+            try
+            {
+                // Estimate gas for the swap transaction
+                var estimatedGas = await web3.Eth.Transactions.EstimateGas.SendRequestAsync(transactionForEstimation);
+                
+                // Add a 30% buffer to the estimation to ensure success
+                var gasWithBuffer = new HexBigInteger(estimatedGas.Value * 13 / 10);
+                Console.WriteLine($"Estimated gas: {estimatedGas.Value}, With buffer: {gasWithBuffer.Value}");
+                
+                // Compare with 1inch suggestion and use the higher value
+                if (gasWithBuffer.Value > gasLimit.Value)
+                {
+                    Console.WriteLine($"Using our estimation ({gasWithBuffer.Value}) instead of 1inch suggestion ({gasLimit.Value})");
+                    gasLimit = gasWithBuffer;
+                }
+                else
+                {
+                    Console.WriteLine($"Using 1inch suggestion ({gasLimit.Value}) instead of our estimation ({gasWithBuffer.Value})");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log the error but continue with the default gas limit
+                Console.WriteLine($"Gas estimation failed: {ex.Message}. Using 1inch suggestion with buffer: {gasLimit.Value}");
+            }
+            
             
             // Create transaction input
             var swapTxInput = new TransactionInput
@@ -268,7 +307,7 @@ namespace BrlaUsdcSwap.Services.Implementations
                 To = swapResponse.Tx.To,
                 Data = swapResponse.Tx.Data,
                 Value = new HexBigInteger(BigInteger.Parse(swapResponse.Tx.Value ?? "0")),
-                Gas = new HexBigInteger(swapResponse.Tx.Gas * 13 / 10), // Adding 30% buffer
+                Gas = gasLimit,
                 GasPrice = gasPriceWithPremium
             };
             
@@ -277,20 +316,36 @@ namespace BrlaUsdcSwap.Services.Implementations
             Console.WriteLine($"Gas: {swapTxInput.Gas.Value}, GasPrice: {swapTxInput.GasPrice.Value}");
             
             // Send the transaction
-            var txHash = await swapWeb3.Eth.TransactionManager.SendTransactionAsync(swapTxInput);
+            var txHash = await web3.Eth.TransactionManager.SendTransactionAsync(swapTxInput);
             
             Console.WriteLine($"Transaction sent: {txHash}. Waiting for confirmation...");
             
             // Wait for receipt and verify success
-            var receipt = await WaitForTransactionReceipt(swapWeb3, txHash);
+            var receipt = await WaitForTransactionReceipt(web3, txHash);
             
             // Calculate the expected buy amount in human-readable format
             var buyTokenDecimals = request.BuyTokenAddress == _appSettings.BrlaTokenAddress 
                 ? _appSettings.BrlaDecimals 
                 : _appSettings.UsdcDecimals;
             
-            var buyAmount = BigInteger.Parse(swapResponse.ToAmount ?? "0");
+            // Get the actual buy amount - this could be in different properties depending on the API response
+            string rawBuyAmount = swapResponse.ToAmount ?? swapResponse.DstAmount ?? "0";
+            Console.WriteLine($"Raw buy amount from response: {rawBuyAmount}");
+            
+            // Parse the amount carefully to avoid errors
+            BigInteger buyAmount;
+            if (!BigInteger.TryParse(rawBuyAmount, out buyAmount))
+            {
+                Console.WriteLine($"Warning: Could not parse buy amount '{rawBuyAmount}', defaulting to 0");
+                buyAmount = BigInteger.Zero;
+            }
+            
+            // Convert to human-readable format with proper decimal places
             var humanReadableBuyAmount = (decimal)buyAmount / (decimal)Math.Pow(10, buyTokenDecimals);
+            Console.WriteLine($"Calculated human-readable amount: {humanReadableBuyAmount} with {buyTokenDecimals} decimals");
+            
+            // Verify with transaction receipt if possible (would require calling the token contract)
+            // This would be a more advanced implementation checking actual token transfers
             
             return new SwapResponse
             {
@@ -348,6 +403,35 @@ namespace BrlaUsdcSwap.Services.Implementations
             //TODO: Use dynamic estimations by using eth_estimateGas RPC method instead of fixed values
             // Use a fixed gas limit for approvals which should be safe
             var gasLimit = new HexBigInteger(100000);
+            
+            
+            // DYNAMIC GAS ESTIMATION - Uncomment this section to use dynamic gas estimation
+            // Create a transaction object for gas estimation
+            var transactionForEstimation = new Nethereum.RPC.Eth.DTOs.CallInput
+            {
+                From = request.OwnerAddress,
+                To = approveResponse.To,
+                Data = approveResponse.Data,
+                Value = new HexBigInteger(0)
+            };
+            
+            try
+            {
+                // Estimate gas for the approval transaction
+                var estimatedGas = await web3.Eth.Transactions.EstimateGas.SendRequestAsync(transactionForEstimation);
+                
+                // Add a 30% buffer to the estimation to ensure success
+                var gasWithBuffer = new HexBigInteger(estimatedGas.Value * 13 / 10);
+                Console.WriteLine($"Estimated gas: {estimatedGas.Value}, With buffer: {gasWithBuffer.Value}");
+                
+                // Use the estimated gas with buffer
+                gasLimit = gasWithBuffer;
+            }
+            catch (Exception ex)
+            {
+                // Log the error but continue with the fixed gas limit as fallback
+                Console.WriteLine($"Gas estimation failed: {ex.Message}. Using fallback gas limit: {gasLimit.Value}");
+            }
             
             // Create transaction input
             var txInput = new TransactionInput
@@ -524,6 +608,12 @@ namespace BrlaUsdcSwap.Services.Implementations
 
         [JsonProperty("fromAmount")]
         public string FromAmount { get; set; }
+        
+        [JsonProperty("dstAmount")]
+        public string DstAmount { get; set; }
+        
+        [JsonProperty("srcAmount")]
+        public string SrcAmount { get; set; }
 
         [JsonProperty("tx")]
         public OneInchTransaction Tx { get; set; }
