@@ -1,3 +1,5 @@
+# WES-1116-Report
+
 # WES-1116 Report: 1inch vs 0x Protocol Implementation Analysis
 
 ## Executive Summary
@@ -52,19 +54,18 @@ The existing Nethereum PoC was originally built using 0x Protocol for DEX aggreg
 ### Protocol Fees
 
 **1inch Protocol:**
-- ✅ **No protocol fees** - 1inch does not charge additional fees beyond network gas fees
 - ✅ **Gas optimization features** - Chi gas token and optimization algorithms can reduce gas costs by up to 40%
 - ✅ **Competitive advantage** - No on-top fees ensure users get the best possible rates
 
 **1inch Infrastructure Fees (Classic Swap API):**
 Infrastructure fees apply to all prepaid plans, exclusively for Classic Swap API transactions. These fees are deducted from the destination amount of each completed Network Request and are distinct from subscription fees.
 
-| Plan     | Fees for stable coins | Fees for non-stable coins |
-|----------|----------------------|---------------------------|
-| Dev      | 10 bps               | 30 bps                    |
-| Startup  | 7 bps                | 20 bps                    |
-| Pro      | 4 bps                | 10 bps                    |
-| Business | 2 bps                | 5 bps                     |
+| Plan | Fees for stable coins | Fees for non-stable coins |
+| --- | --- | --- |
+| Dev | 10 bps | 30 bps |
+| Startup | 7 bps | 20 bps |
+| Pro | 4 bps | 10 bps |
+| Business | 2 bps | 5 bps |
 
 **0x Protocol:**
 - ⚠️ **Selective protocol fees** - 0x charges a 0.15% fee on swaps involving select token pairs (standard plan)
@@ -74,17 +75,17 @@ Infrastructure fees apply to all prepaid plans, exclusively for Classic Swap API
 
 **0x Pricing Plans:**
 
-| Feature                   | Free    | Starter | Growth   | Enterprise |
-|---------------------------|---------|---------|----------|------------|
-| Monthly API calls         | 1M      | 3M      | 6M       | Custom     |
-| Additional API calls (per M) | -     | $500    | $500     | $500       |
-| Apps                      | 1       | 1       | 5        | Unlimited  |
-| On-chain swap fee         | 15 bps  | 15 bps  | 0 bps    | 10 bps     |
-| Performance               |         |         |          |            |
-| RPS (per app)             | 1 RPS   | 2 RPS   | 25 RPS   | Custom     |
-| 99% Uptime SLA            | ✓       | ✓       | ✓        | ✓          |
-| Support                   |         |         |          |            |
-| Priority support          | -       | -       | ✓        | ✓          |
+| Feature | Free | Starter | Growth | Enterprise |
+| --- | --- | --- | --- | --- |
+| Monthly API calls | 1M | 3M | 6M | Custom |
+| Additional API calls (per M) | - | $500 | $500 | $500 |
+| Apps | 1 | 1 | 5 | Unlimited |
+| On-chain swap fee | 15 bps | 15 bps | 0 bps | 10 bps |
+| Performance |  |  |  |  |
+| RPS (per app) | 1 RPS | 2 RPS | 25 RPS | Custom |
+| 99% Uptime SLA | ✓ | ✓ | ✓ | ✓ |
+| Support |  |  |  |  |
+| Priority support | - | - | ✓ | ✓ |
 
 ### Network Gas Fees (Polygon)
 
@@ -104,18 +105,18 @@ For high-volume usage, 0x Growth plan offers 0 bps fees while 1inch Business pla
 ### Execution Rates
 
 | Protocol | Expected Output | Actual Output | Efficiency |
-|----------|----------------|---------------|------------|
-| 0x       | 0.18405 USDC  | 0.18405 USDC | 100% |
+| --- | --- | --- | --- |
+| 0x | 0.18405 USDC | 0.18405 USDC | 100% |
 | 1inch (T1) | 0.182175 USDC | 0.182175 USDC | 100% |
 | 1inch (T2) | 0.182088 USDC | 0.182088 USDC | 100% |
 
 ### Gas Efficiency
 
 | Protocol | Gas Estimated | Gas Used | Efficiency Ratio |
-|----------|---------------|----------|------------------|
-| 0x       | 284,044      | 186,861  | 65.8% |
-| 1inch (T1) | 250,000   | 193,690  | 77.5% |
-| 1inch (T2) | -         | 158,302  | Optimized |
+| --- | --- | --- | --- |
+| 0x | 284,044 | 186,861 | 65.8% |
+| 1inch (T1) | 250,000 | 193,690 | 77.5% |
+| 1inch (T2) | - | 158,302 | Optimized |
 
 ### Liquidity Sources
 
@@ -142,11 +143,13 @@ For high-volume usage, 0x Growth plan offers 0 bps fees while 1inch Business pla
 ## Technical Implementation Notes
 
 ### 0x Integration
+
 - Uses Permit2 signatures for streamlined execution
 - Requires careful gas estimation and buffer calculation
 - Direct interaction with Uniswap V3 pools
 
 ### 1inch Integration
+
 - RESTful API with clear endpoints
 - Built-in approval checking reduces transaction failures
 - Dynamic gas suggestions improve execution success rates
@@ -157,17 +160,10 @@ For high-volume usage, 0x Growth plan offers 0 bps fees while 1inch Business pla
 ### Primary Recommendation: 1inch Protocol
 
 **Rationale:**
-1. **Cost Efficiency**: No protocol fees and advanced gas optimization
-2. **Better User Experience**: Built-in approval management and dynamic gas optimization
-3. **Reliability**: Multiple successful executions with consistent performance
-4. **Future-Proof**: Continuous optimization and feature development
 
-### Implementation Strategy
-
-1. **Phase 1**: Complete 1inch integration with current functionality
-2. **Phase 2**: Implement Chi gas token optimization
-3. **Phase 3**: Add advanced features like Fusion+ for cross-chain swaps
-4. **Phase 4**: Monitor and optimize based on production usage
+1. **Better User Experience**: Built-in approval management and dynamic gas optimization
+2. **Reliability**: Multiple successful executions with consistent performance
+3. **Future-Proof**: Continuous optimization and feature development
 
 ## Conclusion
 
@@ -192,6 +188,17 @@ All findings can be verified through the following Polygonscan transactions:
 - **0x Transaction**: [0x2b8befae6e726852c76a3066e4ea06be1af9b7e03782e5372b9a8ffbd75e6086](https://polygonscan.com/tx/0x2b8befae6e726852c76a3066e4ea06be1af9b7e03782e5372b9a8ffbd75e6086)
 - **1inch Transaction 1**: [0x9d0c53ac18c448b83f0f1143795f189cd602570cb2df5008cb686af67980f91c](https://polygonscan.com/tx/0x9d0c53ac18c448b83f0f1143795f189cd602570cb2df5008cb686af67980f91c)
 - **1inch Transaction 2**: [0xe837268865f98952f024deda22a057ab65e71e443e687d95bee4fc8ae2958a1e](https://polygonscan.com/tx/0xe837268865f98952f024deda22a057ab65e71e443e687d95bee4fc8ae2958a1e)
+
+## Further considerations
+
+- We have to account for the fact that the wallets we create for our customers must have a tiny bit of POL token to pay for network fees in order for the BRLA-to-USDC swaps to happen. We can use the gasless API or we can TOPUP POL from a Westy-owned wallet to their newly created non-custodial wallet. Check: https://0x.org/docs/gasless-api/guides/understanding-gasless-api. 1inch’s Fusion API has the same “gasless transaction” effect, even though it uses a different system - dutch auction -  when compared to 0x’s gasless api, which uses a relay wallet to pay for gas
+- Consider the use of CHI Gas Tokens for gas fees optimization [https://soliditydeveloper.com/chi-gas](https://soliditydeveloper.com/chi-gas)
+- Use advanced features like Fusion+ from 1inch for cross-chain swaps (something to look at if we consider using Solana - not supported as of 2025-0711  - [https://1inch.io/fusion/](https://1inch.io/fusion/))
+    - 0x yet to support Solana too: [https://www.youtube.com/watch?v=CNwSQwxINPc&ab_channel=0x](https://www.youtube.com/watch?v=CNwSQwxINPc&ab_channel=0x)
+
+## References
+
+- https://www.youtube.com/watch?v=fSEaZmbt3K0&ab_channel=ETHGlobal
 
 ---
 
